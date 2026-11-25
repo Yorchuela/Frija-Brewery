@@ -2,20 +2,20 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import UsuarioBloque, { Usuario } from "./users_list";
+import ProveedorBloque, { Proveedor } from "./suppliers_list";
 
-interface TablaUsuariosProps {
-  usuariosIniciales?: Usuario[];
+interface TablaProveedoresProps {
+  proveedoresIniciales?: Proveedor[];
 }
 
-export default function TablaUsuarios({
-  usuariosIniciales = [],
-}: TablaUsuariosProps) {
+export default function TablaProveedores({
+  proveedoresIniciales = [],
+}: TablaProveedoresProps) {
   const [busqueda, setBusqueda] = useState("");
 
-  const listaSegura = usuariosIniciales ?? [];
+  const listaSegura = proveedoresIniciales ?? [];
 
-  const usuariosFiltrados = listaSegura.filter(
+  const proveedoresFiltrados = listaSegura.filter(
     (usuario) =>
       (usuario.nombre ?? "").toLowerCase().includes(busqueda.toLowerCase()) ||
       (usuario.rol ?? "").toLowerCase().includes(busqueda.toLowerCase())
@@ -27,7 +27,7 @@ export default function TablaUsuarios({
         {/* ENCABEZADO: Título + Breadcrumb a la izquierda, Buscador + Botón a la derecha */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">Usuarios</h1>
+            <h1 className="text-3xl font-bold tracking-tight">Proveedores</h1>
             <p className="text-sm italic text-gray-400 mt-1">
               <Link
                 href="/Inicio"
@@ -42,11 +42,11 @@ export default function TablaUsuarios({
               >
                 Administración
               </Link>{" "}
-              &gt; Usuarios
+              &gt; Proveedores
             </p>
           </div>
 
-          {/* Barra de búsqueda y botón Agregar Usuario */}
+          {/* Barra de búsqueda y botón Agregar Proveedor */}
           <div className="flex flex-wrap items-center gap-3">
             <input
               type="text"
@@ -59,11 +59,11 @@ export default function TablaUsuarios({
             <button
               type="button"
               onClick={() => {
-                // Aquí abrirás tu modal o navegarás a /Inicio/admin_resources/usuarios/nuevo
+                // Aquí abrirás tu modal o navegarás a /Inicio/admin_resources/proveedores/nuevo
               }}
               className="bg-[#39423b] hover:bg-[#d9a441] text-gray-200 hover:text-[#120f0d] border border-gray-700 hover:border-[#d9a441] text-sm font-medium px-4 py-2 rounded-md transition-colors cursor-pointer"
             >
-              + Agregar Usuario
+              + Agregar Proveedor
             </button>
           </div>
         </div>
@@ -81,27 +81,27 @@ export default function TablaUsuarios({
               </thead>
 
               <tbody>
-                {usuariosIniciales.length === 0 ? (
+                {proveedoresIniciales.length === 0 ? (
                   <tr>
                     <td
                       colSpan={3}
                       className="py-10 px-6 text-center text-sm text-gray-400"
                     >
-                      No hay usuarios registrados en la base de datos.
+                      No hay proveedores registrados en la base de datos.
                     </td>
                   </tr>
-                ) : usuariosFiltrados.length === 0 ? (
+                ) : proveedoresFiltrados.length === 0 ? (
                   <tr>
                     <td
                       colSpan={3}
                       className="py-10 px-6 text-center text-sm text-gray-400"
                     >
-                      No se encontraron usuarios con &quot;{busqueda}&quot;.
+                      No se encontraron proveedores con &quot;{busqueda}&quot;.
                     </td>
                   </tr>
                 ) : (
-                  usuariosFiltrados.map((user) => (
-                    <UsuarioBloque
+                  proveedoresFiltrados.map((user) => (
+                    <ProveedorBloque
                       key={user.id}
                       id={user.id}
                       nombre={user.nombre}
