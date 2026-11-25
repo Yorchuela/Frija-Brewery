@@ -1,3 +1,4 @@
+import Link from "next/link";
 import BloqueActividad from "./actividad_bloque";
 
 // 1. Define la forma de los datos que devuelve tu base de datos
@@ -57,7 +58,7 @@ export default async function Home() {
             <p className="text-sm text-gray-400 mt-1">Actividad Reciente</p>
           </div>
           <span className="text-sm text-[#d9a441] font-medium hover:underline cursor-pointer">
-            <a href="\Inicio\Admin_resources">&gt; Administración De Recursos</a>
+            <a href="\Inicio\AdminResources">&gt; Administración De Recursos</a>
           </span>
         </div>
 
@@ -105,14 +106,17 @@ export default async function Home() {
 
               <div className="grid grid-cols-4 gap-3">
                 {/* Botón Ver Reporte de Ventas ---------------------------> */}
+                <Link
+                    href="/Inicio/Admin_resources/Reports/OverallSales"
+                    className="text-xs text-gray-300 group-hover:text-[#120f0d] font-medium transition-colors"
+                  >
                 <div className="group bg-[#2a302b] border border-gray-800 p-3 rounded-lg flex flex-col items-center justify-center text-center cursor-pointer hover:bg-[#d9a441] hover:border-[#d9a441] transition-colors">
                   <span className="text-[#d9a441] group-hover:text-[#120f0d] text-xl mb-1 transition-colors">
                     📊
                   </span>
-                  <span className="text-xs text-gray-300 group-hover:text-[#120f0d] font-medium transition-colors">
                     Ver Reporte de Ventas
-                  </span>
                 </div>
+                </Link>
 
                 {/* Botón Productos Stock Bajo ----------------------------> */}
                 <div className="group bg-[#2a302b] border border-gray-800 p-3 rounded-lg flex flex-col items-center justify-center text-center cursor-pointer hover:bg-[#d9a441] hover:border-[#d9a441] transition-colors">
@@ -125,6 +129,10 @@ export default async function Home() {
                 </div>
 
                 {/* Botón Personal Activo ---------------------------------> */}
+                <Link
+                    href="/Inicio/AdminResources/Users"
+                    className="text-xs text-gray-300 group-hover:text-[#120f0d] font-medium transition-colors"
+                >
                 <div className="group bg-[#2a302b] border border-gray-800 p-3 rounded-lg flex flex-col items-center justify-center text-center cursor-pointer hover:bg-[#d9a441] hover:border-[#d9a441] transition-colors">
                   <span className="text-[#d9a441] group-hover:text-[#120f0d] text-xl mb-1 transition-colors">
                     👤
@@ -133,6 +141,7 @@ export default async function Home() {
                     Personal Activo
                   </span>
                 </div>
+                </Link>
 
                 {/* Botón Importaciones Pendientes ------------------------> */}
                 <div className="group bg-[#2a302b] border border-gray-800 p-3 rounded-lg flex flex-col items-center justify-center text-center cursor-pointer hover:bg-[#d9a441] hover:border-[#d9a441] transition-colors">
