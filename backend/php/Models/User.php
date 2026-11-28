@@ -63,4 +63,42 @@ final class User extends BaseModel
 
         return (int) $statement->fetchColumn();
     }
+
+    /**
+     * Lock all active administrators in a consistent order.
+     * Locks remain held until the surrounding transaction finishes.
+     *
+     * @return list<string>
+     */
+    public function lockActiveAdmins(): array
+    {
+        $statement = $this->pdo->prepare(
+            'SELECT user_id FROM ' . static::TABLE_NAME
+            . ' WHERE role = ? AND status = ?'
+            . ' ORDER BY user_id FOR UPDATE'
+        );
+
+        $statement->execute(['ADMIN', 'ACTIVE']);
+
+        return array_map(
+            static fn (array $row): string => (string) $row['user_id'],
+            $statement->fetchAll()
+        );
+    }
+
+    /**
+     * Read and lock a user record for an update or deletion.
+     */
+    public function getByIdForUpdate(int|string $recordId): ?array
+    {
+        $statement = $this->pdo->prepare(
+            'SELECT * FROM ' . static::TABLE_NAME
+            . ' WHERE ' . static::ID_COLUMN . ' = ? FOR UPDATE'
+        );
+
+        $statement->execute([$recordId]);
+        $row = $statement->fetch();
+
+        return $this->publicRow($row === false ? null : $row);
+    }
 }

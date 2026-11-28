@@ -38,29 +38,36 @@ final class AuthController extends BaseController
             throw new ValueError('Persistent must be a boolean');
         }
 
+        // Normalize username for rate limiting.
         $key = strtolower($username);
         $limiter = self::limiter();
-        $limiter->check($key);
 
-        // FRIJA utiliza email como identificador.
+        // Atomically checks and registers the login attempt.
+        $limiter->attempt($key);
+
+        // FRIJA uses email as the login identifier.
         $user = $this->model->findByUsername($username);
+
+        // Always verify a password to reduce account enumeration
+        // through timing differences.
+        $passwordHash = $user !== null
+            ? (string) $user['password']
+            : self::dummyHash();
+
+        $passwordValid = Security::verifyPassword(
+            $password,
+            $passwordHash
+        );
 
         if (
             $user === null
             || $user['status'] !== 'ACTIVE'
-            || !Security::verifyPassword(
-                $password,
-                (string) $user['password']
-            )
+            || !$passwordValid
         ) {
-            if ($user === null) {
-                Security::verifyPassword($password, self::dummyHash());
-            }
-
-            $limiter->fail($key);
             throw new UnauthorizedError('Invalid credentials');
         }
 
+        // Successful login clears the attempt counter.
         $limiter->reset($key);
 
         $settings = Settings::instance();

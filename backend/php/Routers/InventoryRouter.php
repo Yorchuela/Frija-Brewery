@@ -55,19 +55,34 @@ final class InventoryRouter
             },
         );
 
-        // Consultar un registro por ID
+        // Consultar un registro mediante su llave primaria compuesta
         $router->addRoute(
             'GET',
-            '/inventory/{id}',
+            '/inventory/branch/{branchId}/item/{inventoryId}',
             InventoryController::class,
             static function ($controller, array $params, string $body): Response {
-                $id = filter_var($params['id'], FILTER_VALIDATE_INT);
+                $branchId = filter_var(
+                    $params['branchId'],
+                    FILTER_VALIDATE_INT
+                );
 
-                if ($id === false || $id < 1) {
+                $inventoryId = filter_var(
+                    $params['inventoryId'],
+                    FILTER_VALIDATE_INT
+                );
+
+                if ($branchId === false || $branchId < 1) {
+                    throw new ValueError('Invalid branch ID');
+                }
+
+                if ($inventoryId === false || $inventoryId < 1) {
                     throw new ValueError('Invalid inventory ID');
                 }
 
-                $inventory = $controller->getById($id);
+                $inventory = $controller->getByBranchAndId(
+                    $branchId,
+                    $inventoryId
+                );
 
                 if ($inventory === null) {
                     return Response::error(404, 'Inventory not found');

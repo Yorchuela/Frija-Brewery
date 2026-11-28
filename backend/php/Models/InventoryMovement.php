@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace Apicore\Models;
 
-use RuntimeException;
+use Apicore\Services\InventoryIdService;
 use ValueError;
 
 final class InventoryMovement extends BaseModel
@@ -21,92 +21,130 @@ final class InventoryMovement extends BaseModel
 
     public function register(array $data): int
     {
-        $this->pdo->beginTransaction();
+        $branchId = (int) $data['branch_id'];
+        $productId = (int) $data['product_id'];
+        $quantity = (int) $data['quantity'];
+        $type = $data['type'];
+
+        if (!in_array($type, ['IN', 'OUT', 'ADJUSTMENT'], true)) {
+            throw new ValueError('Invalid movement type');
+        }
+
+        if (
+            ($type === 'ADJUSTMENT' && $quantity < 0)
+            || ($type !== 'ADJUSTMENT' && $quantity <= 0)
+        ) {
+            throw new ValueError('Invalid quantity for movement type');
+        }
 
         try {
-            $productCheck = $this->pdo->prepare( 'SELECT status FROM products WHERE product_id = ? FOR UPDATE')
-            ;
+            $this->pdo->beginTransaction();
 
-             $productCheck->execute([$data['product_id']]);
-             $product = $productCheck->fetch();
-
-            if ($product === false || $product['status'] !== 'ACTIVE') {
-             throw new ValueError('Product is not active or does not exist');
-            }
-
-
-
-
-            // Verify that the branch exists and is active.
+            // Validate and lock the branch first.
             $branchCheck = $this->pdo->prepare(
-                'SELECT status FROM branches WHERE branch_id = ? FOR UPDATE'
+                'SELECT status
+                 FROM branches
+                 WHERE branch_id = ?
+                 FOR UPDATE'
             );
 
-            $branchCheck->execute([$data['branch_id']]);
+            $branchCheck->execute([$branchId]);
             $branch = $branchCheck->fetch();
 
             if ($branch === false || $branch['status'] !== 'ACTIVE') {
-                throw new ValueError('Branch is not active or does not exist');
+                throw new ValueError(
+                    'Branch is not active or does not exist'
+                );
             }
 
-            // Ensure the inventory row exists and serialize concurrent access.
-            $ensureInventory = $this->pdo->prepare(
-                'INSERT INTO inventory (branch_id, product_id, stock)
-                 VALUES (?, ?, 0)
-                 ON DUPLICATE KEY UPDATE inventory_id = inventory_id'
+            // Validate and lock the product.
+            $productCheck = $this->pdo->prepare(
+                'SELECT status
+                 FROM products
+                 WHERE product_id = ?
+                 FOR UPDATE'
             );
 
-            $ensureInventory->execute([
-                $data['branch_id'],
-                $data['product_id'],
-            ]);
+            $productCheck->execute([$productId]);
+            $product = $productCheck->fetch();
 
-            // Lock the inventory row before calculating the new stock.
-            $statement = $this->pdo->prepare(
+            if ($product === false || $product['status'] !== 'ACTIVE') {
+                throw new ValueError(
+                    'Product is not active or does not exist'
+                );
+            }
+
+            // Find the distributed inventory record.
+            $inventoryCheck = $this->pdo->prepare(
                 'SELECT inventory_id, stock
-                 FROM inventory
+                 FROM inventory_distributed
                  WHERE branch_id = ? AND product_id = ?
                  FOR UPDATE'
             );
 
-            $statement->execute([
-                $data['branch_id'],
-                $data['product_id'],
-            ]);
+            $inventoryCheck->execute([$branchId, $productId]);
+            $inventory = $inventoryCheck->fetch();
 
-            $inventory = $statement->fetch();
+            $inventoryExists = $inventory !== false;
 
-            if ($inventory === false) {
-                throw new RuntimeException('Inventory record could not be created');
+            if ($inventoryExists) {
+                $inventoryId = (int) $inventory['inventory_id'];
+                $currentStock = (int) $inventory['stock'];
+            } else {
+                $inventoryId = null;
+                $currentStock = 0;
             }
 
-            $currentStock = (int) $inventory['stock'];
-            $quantity = (int) $data['quantity'];
-
-            $newStock = match ($data['type']) {
+            // Calculate the resulting stock.
+            $newStock = match ($type) {
                 'IN' => $currentStock + $quantity,
                 'OUT' => $currentStock - $quantity,
                 'ADJUSTMENT' => $quantity,
-                default => throw new ValueError('Invalid movement type'),
             };
 
             if ($newStock < 0) {
                 throw new ValueError('Insufficient stock');
             }
 
-            // Update inventory.
-            $updateInventory = $this->pdo->prepare(
-                'UPDATE inventory
-                 SET stock = ?
-                 WHERE inventory_id = ?'
-            );
+            // Create the distributed inventory record if necessary.
+            if (!$inventoryExists) {
+                $idService = new InventoryIdService();
+                $inventoryId = $idService->next();
 
-            $updateInventory->execute([
-                $newStock,
-                $inventory['inventory_id'],
-            ]);
+                $insertInventory = $this->pdo->prepare(
+                    'INSERT INTO inventory_distributed
+                        (inventory_id, branch_id, product_id, stock)
+                     VALUES (?, ?, ?, ?)'
+                );
 
-            // Save the movement in the same transaction.
+                $insertInventory->execute([
+                    $inventoryId,
+                    $branchId,
+                    $productId,
+                    $newStock,
+                ]);
+            } elseif ($newStock !== $currentStock) {
+                // Update only when the stock actually changes.
+                $updateInventory = $this->pdo->prepare(
+                    'UPDATE inventory_distributed
+                     SET stock = ?
+                     WHERE inventory_id = ? AND branch_id = ?'
+                );
+
+                $updateInventory->execute([
+                    $newStock,
+                    $inventoryId,
+                    $branchId,
+                ]);
+
+                if ($updateInventory->rowCount() !== 1) {
+                    throw new \RuntimeException(
+                        'Distributed inventory could not be updated'
+                    );
+                }
+            }
+
+            // Register movement history locally.
             $insertMovement = $this->pdo->prepare(
                 'INSERT INTO inventory_movements
                     (branch_id, product_id, type, quantity, reason)
@@ -114,9 +152,9 @@ final class InventoryMovement extends BaseModel
             );
 
             $insertMovement->execute([
-                $data['branch_id'],
-                $data['product_id'],
-                $data['type'],
+                $branchId,
+                $productId,
+                $type,
                 $quantity,
                 $data['reason'] ?? null,
             ]);
@@ -133,7 +171,6 @@ final class InventoryMovement extends BaseModel
 
             throw $error;
         }
-        
     }
 
     public function delete(int|string $recordId): bool

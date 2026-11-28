@@ -86,6 +86,35 @@ final class MiddlewaresTest extends TestCase
         $this->assertNull($request->user);
     }
 
+    public function testAuthAcceptsValidTokenOnPublicRoute(): void
+    {
+        $middleware = new AuthMiddleware(
+            $this->router(),
+            static fn (string $t): array => [
+                'sub' => 1,
+                'role' => 'ADMIN',
+            ]
+        );
+
+        $request = $this->request(
+            'POST',
+            '/public',
+            ['authorization' => 'Bearer valid-token']
+        );
+
+        $response = $middleware->handle(
+            $request,
+            static fn () => new Response(201, ['ok' => true])
+        );
+
+        $this->assertSame(201, $response->status);
+        $this->assertSame('valid-token', $request->token);
+        $this->assertSame(
+            ['sub' => 1, 'role' => 'ADMIN'],
+            $request->user
+        );
+    }
+
     public function testAuthLetsUnknownRouteThrough(): void
     {
         $middleware = new AuthMiddleware($this->router(), static fn (string $t): array => ['sub' => 1]);

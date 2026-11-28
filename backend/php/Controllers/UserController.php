@@ -10,7 +10,7 @@ use Apicore\Models\UserToken;
 use Apicore\Schemas\UserSchema;
 use ValueError;
 
-final class UserController extends BaseController
+class UserController extends BaseController
 {
     protected const MODEL_CLASS = User::class;
     protected const SCHEMA = UserSchema::class;
@@ -57,6 +57,45 @@ final class UserController extends BaseController
     }
 
     /**
+     * Run user updates inside a transaction.
+     */
+    public function update(int|string $recordId, array $data): string
+    {
+        return $this->runUserTransaction(
+            fn (): string => parent::update($recordId, $data)
+        );
+    }
+
+    /**
+     * Run partial user updates inside a transaction.
+     */
+    public function patch(int|string $recordId, array $data): string
+    {
+        return $this->runUserTransaction(
+            fn (): string => parent::patch($recordId, $data)
+        );
+    }
+
+    /**
+     * Run user deletion and token revocation atomically.
+     */
+    public function delete(int|string $recordId): bool
+    {
+        return $this->runUserTransaction(
+            fn (): bool => parent::delete($recordId)
+        );
+    }
+
+    private function runUserTransaction(callable $operation): mixed
+    {
+        if ($this->model === null) {
+            throw new \LogicException('User model is not initialized');
+        }
+
+        return $this->model->transaction($operation);
+    }
+
+    /**
      * Protect user accounts and the last active administrator.
      */
     public function authorize(
@@ -68,7 +107,12 @@ final class UserController extends BaseController
             throw new ForbiddenError('You can only modify your own account');
         }
 
-        $target = $this->model->getById($recordId);
+        // Lock active administrators first, always in the same order.
+        // The surrounding transaction keeps these locks until the write ends.
+        $activeAdmins = $this->model->lockActiveAdmins();
+
+        // Also lock the target user before checking its current state.
+        $target = $this->model->getByIdForUpdate($recordId);
 
         if ($target === null) {
             return;
@@ -85,7 +129,7 @@ final class UserController extends BaseController
         if (
             $targetRole === 'ADMIN'
             && ($target['status'] ?? null) === 'ACTIVE'
-            && $this->model->countActiveByRole('ADMIN') <= 1
+            && count($activeAdmins) <= 1
         ) {
             if ($action === 'delete') {
                 throw new ForbiddenError(
@@ -111,6 +155,15 @@ final class UserController extends BaseController
      * Revoke the user's tokens before deleting the account.
      */
     public function beforeDelete(int|string $recordId): void
+    {
+        $this->revokeUserTokens($recordId);
+    }
+
+    /**
+     * Revoke all tokens associated with a user.
+     * Protected to allow isolated testing without MariaDB.
+     */
+    protected function revokeUserTokens(int|string $recordId): void
     {
         $tokens = new UserToken();
 

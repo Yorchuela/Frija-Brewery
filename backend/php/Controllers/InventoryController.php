@@ -15,4 +15,13 @@ final class InventoryController extends BaseController
     {
         return $this->model->getByBranch($branchId);
     }
+    public function getByBranchAndId(
+    int $branchId,
+    int $inventoryId
+): ?array {
+    return $this->model->getByBranchAndId(
+        $branchId,
+        $inventoryId
+    );
+}
 }

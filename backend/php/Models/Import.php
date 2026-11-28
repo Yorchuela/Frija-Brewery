@@ -27,6 +27,13 @@ final class Import extends BaseModel
         $details = $data['details'];
         unset($data['details']);
 
+        // Acquire product locks in a consistent order.
+        usort(
+            $details,
+            static fn (array $a, array $b): int =>
+                (int) $a['product_id'] <=> (int) $b['product_id']
+        );
+
         $data['status'] ??= 'PENDING';
 
         try {
@@ -104,8 +111,9 @@ final class Import extends BaseModel
         }
     }
 
+
     /**
-     * Receive an import and update inventory atomically.
+     * Receive an import and update inventory.
      */
     public function receiveImport(int|string $recordId): string
     {
@@ -118,6 +126,7 @@ final class Import extends BaseModel
                  WHERE import_id = ?
                  FOR UPDATE'
             );
+
             $importCheck->execute([$recordId]);
             $import = $importCheck->fetch();
 
@@ -126,48 +135,99 @@ final class Import extends BaseModel
                 return self::NOT_FOUND;
             }
 
-            if ($import['status'] === 'RECEIVED') {
-                throw new ValueError('Import has already been received');
+            if ($import['branch_id'] === null) {
+                throw new ValueError(
+                    'Import has no destination branch assigned'
+                );
             }
 
-            if ($import['status'] === 'CANCELLED') {
-                throw new ValueError('Cancelled imports cannot be received');
+            if ($import['status'] !== 'IN_TRANSIT') {
+                throw new ValueError(
+                    'Only imports in transit can be received'
+                );
             }
 
-            if (!in_array($import['status'], ['PENDING', 'IN_TRANSIT'], true)) {
-                throw new ValueError('Invalid import status for reception');
+            $branchId = (int) $import['branch_id'];
+
+            // Validate and lock the destination branch.
+            $branchCheck = $this->pdo->prepare(
+                'SELECT status
+                 FROM branches
+                 WHERE branch_id = ?
+                 FOR UPDATE'
+            );
+
+            $branchCheck->execute([$branchId]);
+            $branch = $branchCheck->fetch();
+
+            if ($branch === false || $branch['status'] !== 'ACTIVE') {
+                throw new ValueError(
+                    'Destination branch is not active or does not exist'
+                );
             }
 
             $detailsStatement = $this->pdo->prepare(
                 'SELECT product_id, quantity
                  FROM import_details
                  WHERE import_id = ?
-                 ORDER BY import_detail_id'
+                 ORDER BY product_id
+                 FOR UPDATE'
             );
+
             $detailsStatement->execute([$recordId]);
             $details = $detailsStatement->fetchAll();
 
             if ($details === []) {
-                throw new ValueError('Import has no details to receive');
+                throw new ValueError(
+                    'Import has no details to receive'
+                );
             }
 
-            $ensureInventory = $this->pdo->prepare(
-                'INSERT INTO inventory (branch_id, product_id, stock)
-                 VALUES (?, ?, 0)
-                 ON DUPLICATE KEY UPDATE inventory_id = inventory_id'
+            $productCheck = $this->pdo->prepare(
+                'SELECT status
+                 FROM products
+                 WHERE product_id = ?
+                 FOR UPDATE'
             );
+
+            // Validate every product before modifying inventory.
+            foreach ($details as $detail) {
+                $productId = (int) $detail['product_id'];
+                $quantity = (int) $detail['quantity'];
+
+                if ($quantity <= 0) {
+                    throw new ValueError(
+                        'Import quantities must be greater than zero'
+                    );
+                }
+
+                $productCheck->execute([$productId]);
+                $product = $productCheck->fetch();
+
+                if ($product === false || $product['status'] !== 'ACTIVE') {
+                    throw new ValueError(
+                        "Product $productId is not active or does not exist"
+                    );
+                }
+            }
 
             $inventoryCheck = $this->pdo->prepare(
                 'SELECT inventory_id, stock
-                 FROM inventory
+                 FROM inventory_distributed
                  WHERE branch_id = ? AND product_id = ?
                  FOR UPDATE'
             );
 
+            $insertInventory = $this->pdo->prepare(
+                'INSERT INTO inventory_distributed
+                    (inventory_id, branch_id, product_id, stock)
+                 VALUES (?, ?, ?, ?)'
+            );
+
             $updateInventory = $this->pdo->prepare(
-                'UPDATE inventory
+                'UPDATE inventory_distributed
                  SET stock = ?
-                 WHERE inventory_id = ?'
+                 WHERE inventory_id = ? AND branch_id = ?'
             );
 
             $insertMovement = $this->pdo->prepare(
@@ -176,34 +236,43 @@ final class Import extends BaseModel
                  VALUES (?, ?, ?, ?, ?)'
             );
 
+            $idService = null;
+
             foreach ($details as $detail) {
-                $branchId = (int) $import['branch_id'];
                 $productId = (int) $detail['product_id'];
                 $quantity = (int) $detail['quantity'];
 
-                $ensureInventory->execute([
-                    $branchId,
-                    $productId,
-                ]);
-
-                $inventoryCheck->execute([
-                    $branchId,
-                    $productId,
-                ]);
+                $inventoryCheck->execute([$branchId, $productId]);
                 $inventory = $inventoryCheck->fetch();
 
                 if ($inventory === false) {
-                    throw new \RuntimeException(
-                        'Inventory record could not be created'
-                    );
+                    // Create the ID service only when a new row is needed.
+                    $idService ??= new \Apicore\Services\InventoryIdService();
+
+                    $inventoryId = $idService->next();
+
+                    $insertInventory->execute([
+                        $inventoryId,
+                        $branchId,
+                        $productId,
+                        $quantity,
+                    ]);
+                } else {
+                    $inventoryId = (int) $inventory['inventory_id'];
+                    $newStock = (int) $inventory['stock'] + $quantity;
+
+                    $updateInventory->execute([
+                        $newStock,
+                        $inventoryId,
+                        $branchId,
+                    ]);
+
+                    if ($updateInventory->rowCount() !== 1) {
+                        throw new \RuntimeException(
+                            'Distributed inventory could not be updated'
+                        );
+                    }
                 }
-
-                $newStock = (int) $inventory['stock'] + $quantity;
-
-                $updateInventory->execute([
-                    $newStock,
-                    $inventory['inventory_id'],
-                ]);
 
                 $insertMovement->execute([
                     $branchId,
@@ -215,8 +284,11 @@ final class Import extends BaseModel
             }
 
             $updateImport = $this->pdo->prepare(
-                "UPDATE imports SET status = 'RECEIVED' WHERE import_id = ?"
+                "UPDATE imports
+                 SET status = 'RECEIVED'
+                 WHERE import_id = ?"
             );
+
             $updateImport->execute([$recordId]);
 
             $this->pdo->commit();
@@ -230,6 +302,8 @@ final class Import extends BaseModel
             throw $error;
         }
     }
+
+
 
     /**
      * Return one import with its detail lines.

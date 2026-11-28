@@ -41,6 +41,27 @@ abstract class BaseModel
     }
 
     /**
+     * Execute an operation inside a database transaction.
+     */
+    public function transaction(callable $operation): mixed
+    {
+        $this->pdo->beginTransaction();
+
+        try {
+            $result = $operation();
+            $this->pdo->commit();
+
+            return $result;
+        } catch (\Throwable $error) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+
+            throw $error;
+        }
+    }
+
+    /**
      * Return only the writable columns of $data (primary key removed).
      *
      * Column names are interpolated into SQL, so unknown keys are rejected

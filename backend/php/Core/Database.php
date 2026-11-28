@@ -48,4 +48,46 @@ final class Database
         }
         return self::$connection = $pdo;
     }
+
+    /**
+     * Create an independent PDO connection.
+     *
+     * Used for operations that must be committed separately
+     * from the main request transaction.
+     */
+    public static function newConnection(): PDO
+    {
+        $settings = Settings::instance();
+
+        $host = $settings->DB_HOST === 'localhost'
+            ? '127.0.0.1'
+            : $settings->DB_HOST;
+
+        $dsn = sprintf(
+            'mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4',
+            $host,
+            $settings->DB_PORT,
+            $settings->DB_NAME,
+        );
+
+        try {
+            $pdo = new PDO(
+                $dsn,
+                $settings->DB_USER,
+                $settings->DB_PASSWORD,
+                [
+                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    PDO::ATTR_EMULATE_PREPARES => false,
+                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                ]
+            );
+
+            $pdo->exec("SET time_zone = '+00:00'");
+
+            return $pdo;
+        } catch (PDOException) {
+            throw new ServiceUnavailableError('Database unavailable');
+        }
+    }
+
 }

@@ -24,6 +24,7 @@ final class ImportSchema
             partial: $partial,
         );
 
+        // Destination branch is required for new imports.
         BaseSchema::validateInteger(
             $data,
             'branch_id',
