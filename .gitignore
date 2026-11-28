@@ -17,3 +17,8 @@ Thumbs.db
 
 # Repositorio de referencia del profesor
 apicore-profesor/
+# Archivos de respaldo
+*.bak
+
+# Auditoría y respaldos locales
+FRIJA_BACKEND_AUDITORIA.zip

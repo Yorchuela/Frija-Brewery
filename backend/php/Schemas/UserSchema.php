@@ -3,41 +3,102 @@ declare(strict_types=1);
 
 namespace Apicore\Schemas;
 
-/**
- * User input schema: field rules of the `users` entity.
- *
- * Layer: schemas (cross-cutting). Validation only: no HTTP, no SQL. Business
- * rules (duplicated username, password hashing, role permissions) live in the
- * controller.
- */
+use ValueError;
+
 final class UserSchema
 {
-    /** @var array<string, int> */
-    public const REQUIRED = ['Username' => 16, 'Name' => 45, 'PaternalSurname' => 25];
-    /** @var array<string, int> */
-    public const OPTIONAL = ['MaternalSurname' => 25];
-    public const STATUSES = ['Active', 'Inactive'];
-    public const ROLES = ['God', 'Admin', 'User', 'Other'];
+    public const ROLES = [
+        'ADMIN',
+        'MANAGER',
+        'SALES',
+        'INVENTORY',
+        'CUSTOMER',
+    ];
 
-    /**
-     * Validate a user payload. $partial (PATCH) checks only the fields sent.
-     *
-     * @param array<string, mixed> $data
-     */
+    public const STATUSES = [
+        'ACTIVE',
+        'SUSPENDED',
+        'BLOCKED',
+    ];
+
     public static function validate(array $data, bool $partial = false): void
     {
-        foreach (self::REQUIRED + self::OPTIONAL as $field => $maxLength) {
-            BaseSchema::validateString(
-                $data,
-                $field,
-                $maxLength,
-                required: array_key_exists($field, self::REQUIRED),
-                partial: $partial,
-            );
+        // Required fields
+        BaseSchema::validateString(
+            $data,
+            'first_name',
+            50,
+            required: true,
+            partial: $partial
+        );
+
+        BaseSchema::validateString(
+            $data,
+            'paternal_last_name',
+            50,
+            required: true,
+            partial: $partial
+        );
+
+        BaseSchema::validateString(
+            $data,
+            'email',
+            100,
+            required: true,
+            partial: $partial
+        );
+
+        BaseSchema::validateString(
+            $data,
+            'password',
+            255,
+            required: true,
+            partial: $partial
+        );
+
+        // Optional fields
+        BaseSchema::validateString(
+            $data,
+            'maternal_last_name',
+            50,
+            partial: $partial
+        );
+
+        BaseSchema::validateString(
+            $data,
+            'phone',
+            15,
+            partial: $partial
+        );
+
+        BaseSchema::validateInteger(
+            $data,
+            'branch_id',
+            minimum: 1,
+            partial: $partial
+        );
+
+        // Email format
+        if (array_key_exists('email', $data)) {
+            if (!filter_var($data['email'], FILTER_VALIDATE_EMAIL)) {
+                throw new ValueError('email must be a valid email address');
+            }
         }
-        BaseSchema::validateEnum($data, 'UserStatus', self::STATUSES, $partial);
-        if (array_key_exists('UserRole', $data)) {
-            BaseSchema::validateEnum($data, 'UserRole', self::ROLES);
+
+        // Password length
+        if (array_key_exists('password', $data)) {
+            if (strlen($data['password']) < 8) {
+                throw new ValueError('password must be at least 8 characters');
+            }
+        }
+
+        // Enum fields are optional because the database has defaults
+        if (array_key_exists('role', $data)) {
+            BaseSchema::validateEnum($data, 'role', self::ROLES);
+        }
+
+        if (array_key_exists('status', $data)) {
+            BaseSchema::validateEnum($data, 'status', self::STATUSES);
         }
     }
 }

@@ -3,39 +3,64 @@ declare(strict_types=1);
 
 namespace Apicore\Models;
 
-/**
- * User model: table definition and queries specific to `users`.
- *
- * Layer: models. The password hash is hidden from every response, but
- * findByUsername() returns it because login needs to verify it.
- */
 final class User extends BaseModel
 {
     protected const TABLE_NAME = 'users';
-    protected const ID_COLUMN = 'UserId';
+    protected const ID_COLUMN = 'user_id';
+
     protected const COLUMNS = [
-        'Username', 'Password', 'Name', 'PaternalSurname', 'MaternalSurname', 'UserStatus', 'UserRole',
+        'first_name',
+        'paternal_last_name',
+        'maternal_last_name',
+        'email',
+        'phone',
+        'password',
+        'role',
+        'branch_id',
+        'status',
     ];
-    protected const HIDDEN_COLUMNS = ['Password'];
+
+    protected const HIDDEN_COLUMNS = ['password'];
 
     /**
-     * Return the full row (including the password hash, for login) or null.
-     *
-     * @return array<string, mixed>|null
+     * Busca un usuario mediante su correo electrónico.
+     * Incluye password para verificar las credenciales.
      */
     public function findByUsername(string $username): ?array
     {
-        $statement = $this->pdo->prepare('SELECT * FROM ' . static::TABLE_NAME . ' WHERE Username = ?');
+        $statement = $this->pdo->prepare(
+            'SELECT * FROM ' . static::TABLE_NAME . ' WHERE email = ?'
+        );
+
         $statement->execute([$username]);
+
         $row = $statement->fetch();
+
         return $row === false ? null : $row;
     }
 
-    /** Number of users holding $role (used to protect the last God account). */
     public function countByRole(string $role): int
     {
-        $statement = $this->pdo->prepare('SELECT COUNT(*) FROM ' . static::TABLE_NAME . ' WHERE UserRole = ?');
+        $statement = $this->pdo->prepare(
+            'SELECT COUNT(*) FROM ' . static::TABLE_NAME . ' WHERE role = ?'
+        );
+
         $statement->execute([$role]);
+
+        return (int) $statement->fetchColumn();
+    }
+        /**
+     * Cuenta únicamente los usuarios activos de un rol específico.
+     */
+    public function countActiveByRole(string $role): int
+    {
+        $statement = $this->pdo->prepare(
+            'SELECT COUNT(*) FROM ' . static::TABLE_NAME
+            . ' WHERE role = ? AND status = ?'
+        );
+
+        $statement->execute([$role, 'ACTIVE']);
+
         return (int) $statement->fetchColumn();
     }
 }

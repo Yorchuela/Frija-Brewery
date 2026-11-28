@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 namespace Apicore\Core;
 
+use ValueError;
+
 /**
  * Security: password hashing and manual JWT (HS256) signing/verification.
  *
@@ -23,36 +25,93 @@ final class Security
     public static function hashPassword(string $password): string
     {
         $salt = bin2hex(random_bytes(16));
-        $digest = hash_pbkdf2('sha256', $password, hex2bin($salt), self::HASH_ITERATIONS, 0, false);
-        return self::HASH_ALGORITHM . '$' . self::HASH_ITERATIONS . '$' . $salt . '$' . $digest;
+
+        $digest = hash_pbkdf2(
+            'sha256',
+            $password,
+            hex2bin($salt),
+            self::HASH_ITERATIONS,
+            0,
+            false
+        );
+
+        return self::HASH_ALGORITHM . '$'
+            . self::HASH_ITERATIONS . '$'
+            . $salt . '$' . $digest;
     }
 
     /**
      * Check a password against a stored hash in constant time.
      *
-     * Also accepts the legacy "salt:hash" format (PBKDF2-SHA256, 100000
-     * iterations) used by rows already present in the database.
+     * Supports bcrypt, current PBKDF2 and legacy PBKDF2 formats.
      */
-    public static function verifyPassword(string $password, string $storedHash): bool
-    {
+    public static function verifyPassword(
+        string $password,
+        string $storedHash
+    ): bool {
+        // Compatibility with existing FRIJA bcrypt hashes.
+        if (
+            str_starts_with($storedHash, '$2a$')
+            || str_starts_with($storedHash, '$2b$')
+            || str_starts_with($storedHash, '$2y$')
+        ) {
+            return password_verify($password, $storedHash);
+        }
+
+        // Current APICore PBKDF2-SHA256 format.
         if (str_contains($storedHash, '$')) {
             $parts = explode('$', $storedHash);
-            if (count($parts) !== 4) {
+
+            if (
+                count($parts) !== 4
+                || $parts[0] !== self::HASH_ALGORITHM
+            ) {
                 return false;
             }
+
             [, $iterations, $salt, $expected] = $parts;
         } else {
+            // Legacy PBKDF2 format: salt:hash.
             $parts = explode(':', $storedHash);
+
             if (count($parts) !== 2) {
                 return false;
             }
+
             [$salt, $expected] = $parts;
             $iterations = (string) self::HASH_ITERATIONS;
         }
-        if (!ctype_xdigit($salt) || !ctype_digit($iterations)) {
+
+        // Validate hash format and lengths.
+        if (
+            !ctype_digit($iterations)
+            || !ctype_xdigit($salt)
+            || strlen($salt) !== 32
+            || !ctype_xdigit($expected)
+            || strlen($expected) !== 64
+        ) {
             return false;
         }
-        $digest = hash_pbkdf2('sha256', $password, hex2bin($salt), (int) $iterations, 0, false);
+
+        $iterationCount = (int) $iterations;
+
+        // Reject invalid or excessive iteration counts.
+        if (
+            $iterationCount < 1
+            || $iterationCount > 1000000
+        ) {
+            return false;
+        }
+
+        $digest = hash_pbkdf2(
+            'sha256',
+            $password,
+            hex2bin($salt),
+            $iterationCount,
+            0,
+            false
+        );
+
         return hash_equals($expected, $digest);
     }
 
@@ -60,16 +119,26 @@ final class Security
 
     public static function base64UrlEncode(string $data): string
     {
-        return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
+        return rtrim(
+            strtr(base64_encode($data), '+/', '-_'),
+            '='
+        );
     }
 
     public static function base64UrlDecode(string $data): string
     {
-        $padded = $data . str_repeat('=', (4 - strlen($data) % 4) % 4);
-        $decoded = base64_decode(strtr($padded, '-_', '+/'), true);
+        $padded = $data
+            . str_repeat('=', (4 - strlen($data) % 4) % 4);
+
+        $decoded = base64_decode(
+            strtr($data, '-_', '+/'),
+            true
+        );
+
         if ($decoded === false) {
             throw new UnauthorizedError('Invalid token');
         }
+
         return $decoded;
     }
 
@@ -79,7 +148,10 @@ final class Security
     private static function sign(string $signingInput): string
     {
         $secret = Settings::instance()->JWT_SECRET;
-        return self::base64UrlEncode(hash_hmac('sha256', $signingInput, $secret, true));
+
+        return self::base64UrlEncode(
+            hash_hmac('sha256', $signingInput, $secret, true)
+        );
     }
 
     /** SHA-256 of the raw token: this is what is stored and looked up in the DB. */
@@ -90,7 +162,7 @@ final class Security
 
     /**
      * Claims of a new token. lifetimeMinutes is ignored when persistent=true
-     * (no `exp` claim); minRemainingMinutes is only a claim for the client.
+     * (no exp claim); minRemainingMinutes is only a claim for the client.
      *
      * @return array<string, mixed>
      */
@@ -102,6 +174,7 @@ final class Security
         bool $persistent = false,
     ): array {
         $now = time();
+
         $payload = [
             'sub' => $userId,
             'role' => $role,
@@ -109,9 +182,11 @@ final class Security
             'jti' => bin2hex(random_bytes(16)),
             'min_remaining_minutes' => $minRemainingMinutes,
         ];
+
         if (!$persistent) {
             $payload['exp'] = $now + $lifetimeMinutes * 60;
         }
+
         return $payload;
     }
 
@@ -122,14 +197,20 @@ final class Security
      */
     public static function encodeToken(array $payload): string
     {
-        $header = ['alg' => Settings::instance()->JWT_ALGORITHM, 'typ' => 'JWT'];
+        $header = [
+            'alg' => Settings::instance()->JWT_ALGORITHM,
+            'typ' => 'JWT',
+        ];
+
         $signingInput = self::base64UrlEncode(self::jsonEncode($header))
-            . '.' . self::base64UrlEncode(self::jsonEncode($payload));
+            . '.'
+            . self::base64UrlEncode(self::jsonEncode($payload));
+
         return $signingInput . '.' . self::sign($signingInput);
     }
 
     /**
-     * Validate structure, algorithm, signature and expiration (no DB check).
+     * Validate structure, algorithm, signature and expiration.
      *
      * Returns the payload. Throws UnauthorizedError on any failure.
      *
@@ -138,24 +219,83 @@ final class Security
     public static function verifyToken(string $token): array
     {
         $parts = explode('.', $token);
+
         if (count($parts) !== 3) {
             throw new UnauthorizedError('Invalid token');
         }
+
         [$headerB64, $payloadB64, $signature] = $parts;
-        $header = json_decode(self::base64UrlDecode($headerB64), true);
-        $payload = json_decode(self::base64UrlDecode($payloadB64), true);
+
+        $header = json_decode(
+            self::base64UrlDecode($headerB64),
+            true
+        );
+
+        $payload = json_decode(
+            self::base64UrlDecode($payloadB64),
+            true
+        );
+
         if (!is_array($header) || !is_array($payload)) {
             throw new UnauthorizedError('Invalid token');
         }
-        if (($header['alg'] ?? null) !== Settings::instance()->JWT_ALGORITHM) {
+
+        // Validate algorithm.
+        if (
+            ($header['alg'] ?? null)
+            !== Settings::instance()->JWT_ALGORITHM
+        ) {
             throw new UnauthorizedError('Invalid token');
         }
-        if (!hash_equals(self::sign($headerB64 . '.' . $payloadB64), $signature)) {
+
+        // Validate signature.
+        if (
+            !hash_equals(
+                self::sign($headerB64 . '.' . $payloadB64),
+                $signature
+            )
+        ) {
             throw new UnauthorizedError('Invalid token');
         }
-        if (isset($payload['exp']) && $payload['exp'] < time()) {
-            throw new UnauthorizedError('Token expired');
+
+        // Validate required claims.
+        if (
+            !isset($payload['sub'])
+            || !is_int($payload['sub'])
+            || $payload['sub'] <= 0
+            || !isset($payload['role'])
+            || !is_string($payload['role'])
+            || $payload['role'] === ''
+        ) {
+            throw new UnauthorizedError('Invalid token');
         }
+
+        // Validate optional claims when present.
+        if (
+            array_key_exists('iat', $payload)
+            && !is_int($payload['iat'])
+        ) {
+            throw new UnauthorizedError('Invalid token');
+        }
+
+        if (
+            array_key_exists('jti', $payload)
+            && !is_string($payload['jti'])
+        ) {
+            throw new UnauthorizedError('Invalid token');
+        }
+
+        // Validate expiration.
+        if (array_key_exists('exp', $payload)) {
+            if (!is_int($payload['exp'])) {
+                throw new UnauthorizedError('Invalid token');
+            }
+
+            if ($payload['exp'] <= time()) {
+                throw new UnauthorizedError('Token expired');
+            }
+        }
+
         return $payload;
     }
 
@@ -166,10 +306,15 @@ final class Security
      */
     private static function jsonEncode(array $value): string
     {
-        $encoded = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        $encoded = json_encode(
+            $value,
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+        );
+
         if ($encoded === false) {
             throw new ValueError('Unable to encode token payload');
         }
+
         return $encoded;
     }
 }
